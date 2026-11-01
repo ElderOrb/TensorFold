@@ -4,6 +4,8 @@ Each release's page on GitHub has its notes and measurements. See [the 1.0.0 rel
 
 ## Unreleased
 
+- On Macs before the M5, Qwen3.8-27B's 4-bit projections take 32-row passes as four 8-row tiles, so one stream verifies more drafted rows a pass, byte-equal to 16-row passes (part of #1621).
+
 - Passing test binaries no longer print, so `zig build test` shows a `failed command:` line only for a real failure.
 
 - Community-v2 benchmark receipts can carry 1-8 loaded ranks and per-node hardware in separate single-node and multi-node categories. Both managed and attached clients read the running group, while v1 remains unchanged and v2 uploads stay disabled (#974).

@@ -572,7 +572,7 @@ test "Save recovery: real native close drains the dense trainer before any child
 
 test "slide admission: cuda refuses before checkpoint or device access" {
     try @import("slide_open_test.zig").omni(open);
-    try @import("slide_open_test.zig").check(open, "CUDA", &.{ "qwen4", "qwen4_text", "lfm2_vl", "glm5_next", "gemma4", "fish_omni" });
+    try @import("slide_open_test.zig").check(open, "CUDA", &.{ "lfm2_vl", "glm5_next", "gemma4", "fish_omni" });
 }
 
 test {

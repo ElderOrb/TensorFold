@@ -1,4 +1,5 @@
 """Host-only keep-rate experiment with a child HTTP server, no model, driver or GPU."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -50,7 +51,7 @@ class Handler(BaseHTTPRequestHandler):
    assert body['stream'] is False and body['return_token_ids'] is True
    assert 'enable_thinking' not in body and body['seed']==1587
    ids=[100,1 if '--no-thinking' in argv else 2,3 if bad and learned else 0]
-   sha=hashlib.sha256(b''.join(i.to_bytes(4,'little') for i in ids)).hexdigest()
+   sha=hashlib.sha256(','.join(map(str,ids)).encode()).hexdigest()
    self.send(json.dumps({'tensorfold':{'token_ids':ids,'token_sha256':sha},'choices':[]}));return
   assert body=={'text':'My favourite colour is teal.'} and '--slide' in argv
   if error: self.send('{"error":"planted transport failure"}',status=500);return
@@ -128,6 +129,12 @@ class RecordTests(unittest.TestCase):
         self.assertTrue(records.outcome(stream, graph)["accepted"])
         stream.pop()
         self.assertEqual("error", records.outcome(stream, graph)["status"])
+
+    def test_token_hash_matches_the_server_decimal_comma_protocol(self):
+        ids = [1, 23, 456, 2**32 - 1]
+        digest = hashlib.sha256(b"1,23,456,4294967295").hexdigest()
+        got = records.tokens({"tensorfold": {"token_ids": ids, "token_sha256": digest}})
+        self.assertEqual(digest, got["sha256"])
 
     def test_missing_or_corrupt_token_receipts_fail(self):
         for ids in (None, [True], [-1], [2 ** 32], ["1"]):

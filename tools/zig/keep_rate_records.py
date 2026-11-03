@@ -95,7 +95,7 @@ def tokens(reply):
     ids = runtime.get("token_ids")
     if not isinstance(ids, list) or any(type(x) is not int or not 0 <= x < 2 ** 32 for x in ids):
         raise ValueError("reply lacks valid u32 tensorfold.token_ids")
-    digest = hashlib.sha256(b"".join(x.to_bytes(4, "little") for x in ids)).hexdigest()
+    digest = hashlib.sha256(",".join(map(str, ids)).encode()).hexdigest()
     if runtime.get("token_sha256", digest) != digest:
         raise ValueError("server token digest disagrees with its IDs")
     return {"ids": ids, "sha256": digest}

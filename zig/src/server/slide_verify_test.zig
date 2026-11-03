@@ -37,9 +37,10 @@ const Model = struct {
         const q = text[0..n];
         const held = std.mem.indexOf(u8, q, "held") != null;
         const probes = std.mem.indexOf(u8, q, "probe") != null;
-        const failed = (m.failure == .plain and held and req.max_tokens < 320) or
-            (m.failure == .thinking and held and req.max_tokens >= 320) or (m.failure == .probes and probes);
-        const answer = if (held and req.max_tokens >= 320) (if (failed) "</think>I don't know." else "</think>blue") else if (failed) "I don't know." else if (held or probes) "blue" else "The ocean is large.";
+        const blue = std.mem.indexOf(u8, q, "colour") != null;
+        const failed = blue and ((m.failure == .plain and held and req.max_tokens < 320) or
+            (m.failure == .thinking and held and req.max_tokens >= 320) or (m.failure == .probes and probes));
+        const answer = if (held and req.max_tokens >= 320) (if (failed) "</think>I don't know." else "</think>blue") else if (failed) "I don't know." else if (held or probes) (if (blue) "blue" else "Ginger") else "The ocean is large.";
         var ids: [64]u32 = undefined;
         for (answer, ids[0..answer.len]) |c, *out| out.* = c;
         sink.event(sink.ctx, id, &.{ .prefilled = 0 });
@@ -97,4 +98,21 @@ test "Lesson repeat: a refused learned event names its last held and probe count
     try fixture.learnOne(srv, "I like blue.", "held plain 0/2 FAIL");
     try t.expectEqual(@as(usize, 0), srv.teacher.lessons);
     try t.expect(!m.live[0]);
+}
+
+test "Lesson repeat: per-fact receipts do not mix a refused fact with a recalled one" {
+    var model: Model = .{ .failure = .plain };
+    var text: fixture.Text = .{};
+    const srv = try Server.init(t.allocator, t.io, model.engine(), text.text(), .{ .served_name = "m", .model_ids = &.{"m"}, .enable_thinking = false, .use_drafts = false }, null);
+    defer srv.deinit();
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    var cx: Cx = .{ .a = arena.allocator() };
+    const verdict = try verify.verify(srv, &cx, .{ .full = .{}, .facts = &.{ "I like blue.", "My dog is called Ginger." }, .held = &.{
+        .{ .question = "What colour do I like (held)?", .answer = "blue", .short = "blue", .fact = 0 },
+        .{ .question = "What is my dog called (held)?", .answer = "Ginger", .short = "Ginger", .fact = 1 },
+    }, .checks = &.{} }, true, Stays{});
+    try t.expectEqualSlices(bool, &.{ false, true }, verdict.recalled);
+    try t.expectEqual(@as(usize, 0), verdict.counts[0].plain.passed);
+    try t.expectEqual(@as(usize, 1), verdict.counts[1].plain.passed);
 }

@@ -76,7 +76,7 @@ const think_twins = 12; // near misses also kept with their thinking replies (ea
 const remember_probes = 4; // kept questions asked again as "Do you remember...?", which the model otherwise refuses
 pub const min_probes = 3; // two answers are held out to test recall
 const want_probes = 12; // questions a fact is learned from at least, when the model gives that many
-const replayed = 24; // earlier answers about a subject a document lesson keeps at most, the latest first
+const replay = @import("slide_lesson_replay.zig").replay;
 
 const personal_checks = 3;
 const bank_checks = 6; // one bank question in this many is held back from each lesson to check
@@ -89,7 +89,8 @@ pub const Check = struct { question: []const u8, before: []const u8, thinking: [
 pub const Held = struct { question: []const u8, answer: []const u8, fact: usize, subject: []const u8 = "", short: []const u8 = "", context: []const u8 = "" }; // subject: the word an edit keys on; short: the fewest words that answer it; context: the conversation it is asked after
 
 /// A lesson for the learner, its facts, and what to ask after it; `probes` are wordings it never trains on.
-pub const Plan = struct { full: api.LearnRequest, facts: []const []const u8, held: []const Held, probes: []const Held = &.{}, checks: []const Check, thinks: bool = false, document: bool = false, stale: slide_teacher.Stale = .{} };
+pub const Source = struct { siblings: []const []const u8, supplied: []const []const u8 };
+pub const Plan = struct { source: ?Source = null, full: api.LearnRequest, facts: []const []const u8, held: []const Held, probes: []const Held = &.{}, checks: []const Check, thinks: bool = false, document: bool = false, stale: slide_teacher.Stale = .{} };
 
 /// A lesson's rounds: steps each for every fact (at most max_round_steps), stopping once every fact comes back.
 pub const round_steps = 20;
@@ -105,9 +106,13 @@ pub fn routed(srv: *Server, cx: *Cx, c: Check) !struct { prompt: api.Example, ke
 
 /// One lesson for the facts `told` (kept[f]: fact f had enough clean answers), or null; `siblings`: all facts told.
 pub fn lesson(srv: *Server, cx: *Cx, teacher: *Teacher, told: []const []const u8, kept: []bool, document: bool, siblings: []const []const u8, supplied: []const []const u8, gone: anytype) !?Plan {
+    return lessonAt(srv, cx, teacher, told, kept, document, siblings, supplied, 0, gone);
+}
+
+pub fn lessonAt(srv: *Server, cx: *Cx, teacher: *Teacher, told: []const []const u8, kept: []bool, document: bool, siblings: []const []const u8, supplied: []const []const u8, attempt: u32, gone: anytype) !?Plan {
     const a = cx.a;
     const end = try turnEnd(srv, cx, teacher);
-    var parts: Parts = .{ .thinks = try thinks(srv, cx, teacher), .document = document, .siblings = siblings };
+    var parts: Parts = .{ .wording_attempt = attempt, .thinks = try thinks(srv, cx, teacher), .document = document, .siblings = siblings };
     var count: u32 = 0;
     const language = try languageOf(srv, cx, told[0], gone);
     for (told, kept, 0..) |fact, *k, f| {
@@ -199,7 +204,7 @@ pub fn lesson(srv: *Server, cx: *Cx, teacher: *Teacher, told: []const []const u8
         .unasked = parts.unasked.items,
         .steps = steps,
     };
-    return .{ .full = full, .facts = told, .held = parts.held.items, .probes = parts.probes.items, .checks = checks.items, .thinks = parts.thinks, .document = document, .stale = .{ .keep = stale_keep.items, .bank = stale_bank.items } };
+    return .{ .source = .{ .siblings = siblings, .supplied = supplied }, .full = full, .facts = told, .held = parts.held.items, .probes = parts.probes.items, .checks = checks.items, .thinks = parts.thinks, .document = document, .stale = .{ .keep = stale_keep.items, .bank = stale_bank.items } };
 }
 
 /// The facts' examples as a lesson gathers them.
@@ -570,19 +575,6 @@ pub fn heldBack(lessons: usize, i: usize) bool {
 fn questionsFor(a: Allocator, document: bool, fact: []const u8, count: usize, language: ?[]const u8) ![]const u8 {
     if (document) return prompted(a, prompts.doc_questions_prompt, slide_language.doc_questions_other, .{ fact, count, count }, language);
     return prompted(a, prompts.questions_prompt, questions_other, .{ fact, count, count }, language);
-}
-
-/// Earlier learned answers about the subject `fact` names, the latest `replayed` of them, into `keep`.
-fn replay(srv: *Server, cx: *Cx, teacher: *Teacher, fact: []const u8, end: []const u32, keep: *std.ArrayList(api.Example)) !void {
-    var n: usize = 0;
-    var i = teacher.told.items.len;
-    while (i > 0 and n < replayed) : (i -= 1) {
-        const t = teacher.told.items[i - 1];
-        if (std.ascii.findIgnoreCase(fact, t.subject) == null) continue;
-        try keep.append(cx.a, try example(srv, cx, cx.a, null, t.question, t.answer, end));
-        n += 1;
-    }
-    if (n > 0) log.line("slide: {d} answers of earlier facts about its subject are replayed for it to keep", .{n});
 }
 
 /// Whether most of a fact's questions ask who: its answer is someone.

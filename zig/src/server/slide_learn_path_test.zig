@@ -93,7 +93,13 @@ fn has(text: []const u8, word: []const u8) bool {
 /// The scripted model: answers the lesson writer's prompts, and the taught model answers the facts it holds.
 pub const Model = struct {
     seeded_questions: bool = false,
+    accept_after: usize = 1,
+    starts: usize = 0,
+    continuations: usize = 0,
+    refuse_drop: bool = false,
     samples: std.ArrayList(u64) = .empty,
+    detector_fingerprints: std.ArrayList(u64) = .empty,
+    sampled_while_open: usize = 0,
     probe_salt: i64 = 0,
     last_prompt_seed: u64 = 0,
     gives_up: []const u8 = "", // a fact whose lessons never bring it back
@@ -118,6 +124,7 @@ pub const Model = struct {
         m.trained.deinit(m.gpa);
         m.pending.deinit(m.gpa);
         m.samples.deinit(m.gpa);
+        m.detector_fingerprints.deinit(m.gpa);
     }
     fn record(m: *Model, bytes: []const u8) !void {
         const kept = try m.gpa.dupe(u8, bytes);
@@ -142,7 +149,7 @@ pub const Model = struct {
         return null;
     }
     fn questions(a: Allocator, t: Topic, n: usize, rotation: usize) ![]const u8 {
-        const forms = [_][]const u8{ "What {s} do I like?", "Which {s} do I like?", "What is my favourite {s}?", "Tell me the {s} I like.", "Which {s} is my favourite?", "What {s} did I say I like?", "Do you know what {s} I like?", "What {s} do I enjoy?", "Name the {s} I like.", "Which {s} do I love?", "What kind of {s} do I like?", "What {s} am I fond of?" };
+        const forms = [_][]const u8{ "What {s} do I like?", "Which {s} do I like?", "What is my favourite {s}?", "Tell me the {s} I like.", "Which {s} is my favourite?", "What {s} did I say I like?", "Do you know what {s} I like?", "What {s} do I enjoy?", "Name the {s} I like.", "Which {s} do I love?", "What kind of {s} do I like?", "What {s} am I fond of?", "Can you name my preferred {s}?", "Could you tell me which {s} I enjoy?", "What {s} is the one I prefer?", "Say which {s} I like best.", "Remind me which {s} I enjoy.", "What {s} did I mention enjoying?", "Tell me my favourite kind of {s}.", "Which {s} would I call my favourite?", "Do you recall the {s} I enjoy?", "What {s} is my preference?", "Which {s} do I tend to like?", "Name my favourite kind of {s}." };
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(a);
         for (0..@min(n, forms.len)) |i| {
@@ -162,7 +169,7 @@ pub const Model = struct {
             const t = topicOf(user) orelse return "1. What is my name?\n";
             if (has(user, "yes-or-no")) return "1. Do I like red?\n2. Do I like green?\n3. Do I like grey?\n4. Do I like pink?\n";
             if (has(user, "does not answer") or has(user, "something else")) return "1. What colour is my car?\n2. Where do I live?\n3. What is my job?\n4. What is my dog's name?\n5. What sport do I play?\n6. What is my age?\n";
-            return questions(a, topics[t], 12, if (m.seeded_questions) @intCast((seed orelse 0) % 12) else 0);
+            return questions(a, topics[t], 12, if (m.seeded_questions) @intCast((seed orelse 0) % 24) else 0);
         }
         if (has(user, "Rewrite each to start with")) return "1. Do you remember what colour I like?\n2. Do you know what fruit I like?\n";
         if (has(user, "write two questions worded almost the same")) return "1. What colour does my sister like?\n2. What colour does my brother like?\n";
@@ -194,6 +201,7 @@ pub const Model = struct {
             return error.Busy;
         }
         if (request.sampling) |sample| if (m.seeded_questions) {
+            m.sampled_while_open += @intFromBool(m.open != null);
             m.last_prompt_seed = api.seedFor(request.prompt, m.probe_salt);
             m.samples.append(m.gpa, sample.seed) catch return error.Busy;
         };
@@ -217,6 +225,7 @@ pub const Model = struct {
         }
         const m: *Model = @ptrCast(@alignCast(ctx));
         if (request.drop or request.undo) {
+            if (m.refuse_drop and m.open != null) return sink.event(sink.ctx, &.{ .done = .{ .message = "injected drop refusal" } });
             m.drops += 1;
             if (m.open) |t| m.live[t] = false;
             if (m.draft_index) |_| m.gpa.free(m.trained.pop().?);
@@ -225,7 +234,12 @@ pub const Model = struct {
             m.open = null;
             return sink.event(sink.ctx, &.{ .done = .{} });
         }
+        if (request.train.len > 0 and request.more) m.continuations += 1;
         if (request.train.len > 0 and !request.more) {
+            m.starts += 1;
+            var fingerprint = std.hash.Wyhash.init(0);
+            for (request.asked) |ex| fingerprint.update(std.mem.sliceAsBytes(ex.ids));
+            m.detector_fingerprints.append(m.gpa, fingerprint.final()) catch return error.Busy;
             // a new lesson: which fact it teaches, and the personal prompts it keeps as they are
             var buf: [512]u8 = undefined;
             const ex = request.train[0];
@@ -251,7 +265,7 @@ pub const Model = struct {
             if (m.mode == .save) return sink.event(sink.ctx, &.{ .done = .{ .message = "injected save failure" } });
         }
         const t = m.open orelse return sink.event(sink.ctx, &.{ .done = .{} });
-        const back = !std.mem.eql(u8, topics[t].fact, m.gives_up);
+        const back = m.starts >= m.accept_after and !std.mem.eql(u8, topics[t].fact, m.gives_up);
         if (request.train.len > 0) {
             m.live[t] = back;
             sink.event(sink.ctx, &.{ .learned = .{ .recalled = back, .steps = 1, .loss = 0 } });

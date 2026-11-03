@@ -281,6 +281,13 @@ const drain_idle_ms = 10_000;
 
 /// One POST /v1/slide/learn through the router, its whole event stream read.
 pub fn learnOne(srv: *Server, text: []const u8, failure: ?[]const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const body = try std.fmt.allocPrint(arena.allocator(), "{{\"text\": \"{s}\"}}", .{text});
+    return learnBody(srv, body, failure);
+}
+
+pub fn learnBody(srv: *Server, body: []const u8, failure: ?[]const u8) !void {
     var pair: [2]platform.posix.socket_t = undefined;
     if (platform.windows) {
         try platform.posix.socketpair(&pair);
@@ -290,7 +297,6 @@ pub fn learnOne(srv: *Server, text: []const u8, failure: ?[]const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const body = try std.fmt.allocPrint(a, "{{\"text\": \"{s}\"}}", .{text});
     const head = try std.fmt.allocPrint(a, "POST /v1/slide/learn HTTP/1.1\r\nHost: t\r\nContent-Length: {d}\r\n\r\n{s}", .{ body.len, body });
     var sent: usize = 0;
     while (sent < head.len) {

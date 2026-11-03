@@ -20,7 +20,7 @@ const attend_rows = 16;
 pub const ring = cfg.window + prompt_rows;
 
 /// A stream's rows in one forward: its cache slot, first position, tokens.
-pub const Chain = struct { slot: usize, p0: usize, tokens: []const u32, images: []const Inject = &.{} };
+pub const Chain = struct { slot: usize, p0: usize, tokens: []const u32, images: []const Inject = &.{}, untaught: bool = false };
 
 /// An image's rows in a chunk: rows [row, row + rows) take `src`'s (unscaled), seeing all of them on sliding layers.
 pub const Inject = struct { row: usize, rows: usize, src: u64 };
@@ -39,6 +39,7 @@ pub fn inverseFrequencies(is_global: bool, out: []f32) void {
 }
 
 pub const Model = struct {
+    learning: ?@import("learning_hook.zig").Hook(cuda.DeviceBuffer, cuda.Stream) = null,
     gpa: std.mem.Allocator,
     d: *const cuda.Driver,
     w: *const wts.Weights,
@@ -260,6 +261,12 @@ pub const Model = struct {
         for (ls, outs) |l, out| try m.project(k, s, l, x, xs, out, rows, prompt);
     }
 
+    fn view(m: *Model, ptr: u64, rows: usize, width: usize) @import("learning_hook.zig").View(cuda.DeviceBuffer) {
+        return .{ .buffer = .{ .d = m.d, .ptr = ptr, .len = rows * width * 2 }, .len = rows * width * 2, .rows = rows, .width = width };
+    }
+    fn note(m: *Model, s: cuda.Stream, l: ?usize, node: @import("learning_hook.zig").Node, ptr: u64, rows: usize, width: usize) !void {
+        if (m.learning) |h| try h.note(s, l, node, m.view(ptr, rows, width));
+    }
     /// Every chain's rows (a prompt chunk, or decode windows); rows [head0, head0 + heads)'s capped logits at s.logits.
     pub fn forward(m: *Model, k: *const kern.Kernels, s: cuda.Stream, chains: []const Chain, prompt: bool, head0: usize, heads: usize) !void {
         var rows: usize = 0;
@@ -270,6 +277,16 @@ pub const Model = struct {
         }
         if (rows > @as(usize, if (prompt) prompt_rows else round_rows) or (prompt and chains.len != 1)) return error.BadWindow;
         if (heads > round_rows or head0 + heads > rows) return error.BadWindow;
+        if (m.learning) |hook| {
+            var runs: [128]@import("learning_hook.zig").Run = undefined;
+            var first: usize = 0;
+            if (chains.len > runs.len) return error.GemmaLearningRows;
+            for (chains, 0..) |c, i| {
+                runs[i] = .{ .first = first, .rows = c.tokens.len, .position = c.p0, .untaught = c.untaught };
+                first += c.tokens.len;
+            }
+            try hook.begin(hook.ctx, runs[0..chains.len], rows);
+        }
         const ids = try m.gpa.alloc(i32, 3 * rows);
         defer m.gpa.free(ids);
         var at: usize = 0;
@@ -294,7 +311,7 @@ pub const Model = struct {
             try m.upload(s, m.s.hi, std.mem.sliceAsBytes(hi));
         }
         // a decode forward's launches depend on its row count only (positions and slots are read on the device)
-        if (prompt or !m.graphed or head0 != 0 or heads != rows) return m.launch(k, s, chains, rows, prompt, head0, heads);
+        if (prompt or !m.graphed or (if (m.learning) |h| h.active(h.ctx) else false) or head0 != 0 or heads != rows) return m.launch(k, s, chains, rows, prompt, head0, heads);
         if (m.graphs[rows] == null) m.graphs[rows] = try m.capture(k, s, rows);
         try m.graphs[rows].?.launchOn(s);
     }
@@ -323,12 +340,16 @@ pub const Model = struct {
         if (prompt) for (chains[0].images) |im| {
             try m.d.check(m.d.api.cuMemcpyDtoDAsync_v2(x.h[0] + im.row * h * 2, im.src, im.rows * h * 2, s.handle), "cuMemcpyDtoDAsync");
         };
+        try m.note(s, null, .input, x.h[0], rows, h);
         // layer 0's input norm alone; every later one is the previous layer's dense tail
         try k.norms.addRmsTail(s, x.h[0], null, m.w.layers[0].input_norm, x.h[1], x.n, x.xs, rows, h, cfg.eps, .{ .round = true });
+        try m.note(s, null, .normed, x.n, rows, h);
         for (0..m.layers) |i| try m.layer(k, s, chains, i, rows, prompt);
         if (heads == 0) return;
         try m.project(k, s, m.w.head, x.n + head0 * h * 2, x.xs + head0 * (h / 64) * 4, x.logits, heads, false);
+        try m.note(s, null, .head_raw, x.logits, heads, cfg.vocab);
         try k.act.softcap(s, x.logits, x.logits, heads, cfg.vocab, cfg.softcap);
+        try m.note(s, null, .head, x.logits, heads, cfg.vocab);
     }
 
     /// Layer i on the rows: residual in s.h[0], its normed input (and sums) in s.n (s.xs); the same on return.
@@ -345,12 +366,18 @@ pub const Model = struct {
         if (l.v) |v| {
             try m.projectMany(k, s, &.{ l.q, l.k, v }, x.n, x.xs, &.{ x.q, x.k, x.v }, rows, prompt);
         } else try m.projectMany(k, s, &.{ l.q, l.k }, x.n, x.xs, &.{ x.q, x.k }, rows, prompt);
+        try m.note(s, i, .q_raw, x.q, rows, qw);
+        try m.note(s, i, .k_raw, x.k, rows, kw);
+        try m.note(s, i, .v_raw, if (global) x.k else x.v, rows, kw);
         const vsrc = if (global) x.k else x.v; // global layers: v is k_proj's output, unit-normed and not rotated
         const src: cuda.qk_rows.Src = .{ .q = x.q, .q_ld = @intCast(qw), .q_hs = @intCast(dh), .k = x.k, .k_ld = @intCast(kw), .k_hs = @intCast(dh), .v = vsrc, .v_ld = @intCast(kw), .v_hs = @intCast(dh) };
         const shape: cuda.qk_rows.Shape = .{ .norms = l.q_norm, .norm_k = l.k_norm, .norms_bf16 = true, .inv = if (global) m.inv_global else m.inv_sliding, .rot = dh, .eps = cfg.eps, .round = true, .v_norm = true };
         const len = m.cacheLen(i);
         const pg = if (global) m.pagesFor(null) else null;
         try k.qk.rowsFrom(s, src, .{ .h = geo.query_heads, .hk = kvh, .dim = dh }, shape, x.pos, x.slot, .{ .q = x.qr, .k = x.kr, .v = x.vr, .kc = if (pg != null) null else m.kc[i], .vc = if (pg != null) null else m.vc[i], .len = len }, rows);
+        try m.note(s, i, .query, x.qr, rows, qw);
+        try m.note(s, i, .key, x.kr, rows, kw);
+        try m.note(s, i, .value, x.vr, rows, kw);
         const w: Window = .{ .h = geo.query_heads, .hk = kvh, .d = dh, .win = if (global) 0 else cfg.window, .ring = len, .scale = 1, .p32 = true, .pg = pg };
         if (pg != null) try k.win.put(s, x.kr, x.vr, m.kc[i], m.vc[i], x.pos, x.slot, w, rows);
         if (prompt) {
@@ -365,14 +392,26 @@ pub const Model = struct {
                 try k.win.decode(s, x.qr + r * qw * 2, m.kc[i], m.vc[i], x.att + r * qw * 2, x.pos + r * 4, x.slot + r * 4, w, x.part, n);
             }
         }
+        try m.note(s, i, .attention, x.att, rows, qw);
         try k.act.groupSums(s, x.att, qw, x.xs, rows, qw);
         try m.project(k, s, l.o, x.att, x.xs, x.o, rows, prompt);
+        try m.note(s, i, .attn_output, x.o, rows, h);
         try k.norms.addRmsTail(s, x.o, x.h[0], l.pre_feedforward, x.h[1], x.n, x.xs, rows, h, cfg.eps, .{ .round = true, .branch = l.post_attention });
+        try m.note(s, i, .mid, x.h[1], rows, h);
+        try m.note(s, i, .mlp_input, x.n, rows, h);
         try m.projectMany(k, s, &.{ l.gate, l.up }, x.n, x.xs, &.{ x.gate, x.up }, rows, prompt);
+        try m.note(s, i, .gate, x.gate, rows, geo.intermediate);
+        try m.note(s, i, .up, x.up, rows, geo.intermediate);
         try k.act.geglu(s, x.gate, geo.intermediate, x.up, geo.intermediate, x.act, x.xs, rows, geo.intermediate);
+        try m.note(s, i, .act, x.act, rows, geo.intermediate);
         try m.project(k, s, l.down, x.act, x.xs, x.y, rows, prompt);
+        try m.note(s, i, .mlp_base, x.y, rows, h);
+        if (m.learning) |hook| try hook.dense(hook.ctx, s, i, m.view(x.n, rows, h), m.view(x.y, rows, h));
+        try m.note(s, i, .mlp_output, x.y, rows, h);
         const next = if (i + 1 < m.layers) m.w.layers[i + 1].input_norm else m.w.final_norm;
         try k.norms.addRmsTail(s, x.y, x.h[1], next, x.h[0], x.n, x.xs, rows, h, cfg.eps, .{ .round = true, .branch = l.post_feedforward, .scalar = l.scalar });
+        try m.note(s, i, .residual, x.h[0], rows, h);
+        try m.note(s, i, .next, x.n, rows, h);
         if (std.mem.indexOfScalar(u32, m.taps[0..m.tap_count], @intCast(i))) |j| {
             const p: cuda.abi.Memcpy2D = .{ .src = x.h[0], .src_pitch = h * 2, .dst = m.taps_buf.?.ptr + j * h * 2, .dst_pitch = m.tap_count * h * 2, .width = h * 2, .height = rows };
             try m.d.check(m.d.api.cuMemcpy2DAsync_v2(&p, s.handle), "cuMemcpy2DAsync");

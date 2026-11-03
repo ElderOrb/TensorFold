@@ -72,3 +72,11 @@ test {
 }
 
 pub const restart_fixture = @import("restart_fixture.zig");
+
+test {
+    _ = @import("geglu_test.zig");
+}
+
+pub const dense_pockets = @import("dense_pockets.zig");
+
+pub const dense_matrix = @import("dense_matrix.zig");

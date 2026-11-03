@@ -472,6 +472,8 @@ pub fn main(init: std.process.Init) !u8 {
     defer living_gdn.destroy();
     const living_qsa = try native_living.Qsa.create(a, device, queue, &kernels, o.only);
     defer living_qsa.destroy();
+    const living_gemma = try native_living.Gemma.create(a, device, queue, &kernels, o.only);
+    defer living_gemma.destroy();
     const native_hc = try @import("metal_qwen4_hc.zig").Suite.create(a, device, queue, &kernels, o.only);
     defer native_hc.destroy();
     const native_qsa_select = try @import("metal_qwen4_qsa_select.zig").Suite.create(a, device, queue, &kernels, o.only);

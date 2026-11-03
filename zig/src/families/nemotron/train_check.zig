@@ -2,16 +2,14 @@
 const std = @import("std");
 const mtl = @import("metal");
 const sources = @import("kernel_sources");
+const bf16_round = @import("bf16_round");
 
 const Shape = extern struct { rows: u32, heads: u32, dh: u32, groups: u32, n: u32, inner: u32, conv: u32, proj: u32 };
 const guard = 16;
 const sentinel: u32 = 0x7fc00000;
 const a = std.testing.allocator;
 
-fn bf(v: f32) u16 {
-    const u: u32 = @bitCast(v);
-    return @intCast((u + 0x7fff + ((u >> 16) & 1)) >> 16);
-}
+const bf = bf16_round.bits;
 
 fn value(v: u16) f64 {
     return @as(f32, @bitCast(@as(u32, v) << 16));
@@ -323,4 +321,17 @@ test "Nemotron SSM backward: 1024 threads and FP64 gradients from zero state" {
 
 test "Nemotron SSM backward: seeded checkpoints, groups and finite differences" {
     try check(true);
+}
+
+test "Nemotron SSM backward: bf is core's bits(), 0xffffffff gives a NaN, other words the plain + copy's bits" {
+    try std.testing.expect(std.math.isNan(value(bf(@bitCast(@as(u32, 0xffff_ffff))))));
+    var prng = std.Random.DefaultPrng.init(1863);
+    for (0..1 << 19) |i| { // every bf16 value's tie and carry edges, then random words
+        const lo = [_]u32{ 0x7fff, 0x8000, 0x8001, 0xffff };
+        const w: u32 = if (i < 1 << 18) @as(u32, @intCast(i >> 2)) << 16 | lo[i & 3] else prng.random().int(u32);
+        const v: f32 = @bitCast(w);
+        if (std.math.isNan(v)) {
+            try std.testing.expect(std.math.isNan(value(bf(v))));
+        } else try std.testing.expectEqual(@as(u16, @intCast((w + 0x7fff + ((w >> 16) & 1)) >> 16)), bf(v));
+    }
 }

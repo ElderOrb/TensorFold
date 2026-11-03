@@ -157,6 +157,10 @@ const Host = struct {
 pub fn open(a: Allocator, gpa: Allocator, io: std.Io, o: api.Open, problem: *[]const u8) !?api.Opened {
     const report = @import("sys").optional_libraries.atBoundary();
     defer report.deinit();
+    if (o.slide and (std.mem.eql(u8, o.model_type, "qwen4") or std.mem.eql(u8, o.model_type, "qwen4_text"))) if (try o.slideRefusal(a, "Macs")) |why| {
+        problem.* = why;
+        return null;
+    };
     if (fsr_options.refuse(o, problem)) return null;
     if (o.prompt_int8 or o.rope_yarn != null) {
         problem.* = if (o.prompt_int8) prompt_int8_refusal else "--rope-yarn: the Metal engine has no YaRN rope; serve without --rope-yarn";
@@ -553,7 +557,7 @@ test "prompt precision: Metal refuses int8 before any model or family-specific l
 
 test "slide admission: Metal entry points refuse before checkpoint or device access" {
     const check = @import("slide_open_test.zig").check;
-    for (families) |f| if (!std.mem.eql(u8, f.model_type, "nemotron_h") and !std.mem.eql(u8, f.model_type, "qwen4") and !std.mem.eql(u8, f.model_type, "qwen4_text")) try check(open, "Macs", &.{f.model_type});
+    for (families) |f| if (!std.mem.eql(u8, f.model_type, "nemotron_h")) try check(open, "Macs", &.{f.model_type});
     try check(@import("qwen35.zig").open, "Macs", &.{"qwen3_5"});
     try check(@import("gemma4.zig").open, "Macs", &.{"gemma4"});
     try check(@import("lfm2_moe.zig").open, "Macs", &.{"lfm2_moe"});

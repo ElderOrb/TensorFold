@@ -4,6 +4,8 @@ Each release's page on GitHub has its notes and measurements. See [the 1.0.0 rel
 
 ## Unreleased
 
+- Living Weights can audit its pocket: for each learned fact's neurons, what they fire on across the fact's own questions, its subject in other contexts, other facts' questions and a general probe set, with off-subject firing flagged in `GET /v1/slide/graph` and `tensorfold slide`. Read-only: no weight, lesson or check changes, and `--slide` off is unchanged (#1968).
+
 - Living Weights: `tensorfold slide audit` measures each learned fact's pocket neurons against its questions, subject contexts, other facts and 256 fixed general prompts. The explicit graph audit adds firing rates and strongest off-subject prompts without changing weights, lessons or checks (#1968).
 
 - Cortheon reads a GitHub file as raw text from `GitHub.com` and `www.github.com` too, keeps search results and seen links whose scheme is written in capitals, and reads a link whose tag breaks after a carriage return (#1949). Thanks to @ppardus.

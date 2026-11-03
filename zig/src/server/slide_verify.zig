@@ -19,15 +19,19 @@ const askBase = slide_ask.askBase;
 const check_tokens = teach.check_tokens;
 const think_leaks = @import("slide_think.zig").think_leaks;
 
+pub const Counts = @import("slide_verdict.zig").Counts;
+
 const steady_prompt = "Tell me something interesting about the ocean.";
 
 /// What a round did: which facts come back, a question about something else it took, and damage that undoes it.
-pub const Verdict = struct { recalled: []bool, took: ?Check = null, damage: ?[]const u8 = null };
+pub const Verdict = struct { recalled: []bool, counts: []const Counts = &.{}, took: ?Check = null, damage: ?[]const u8 = null };
 
 /// After a round: which facts come back, and damage if a reply loops, leaks or changes (`last`: thinking checks too).
 pub fn verify(srv: *Server, cx: *Cx, plan: Plan, last: bool, gone: anytype) !Verdict {
     const a = cx.a;
     const recalled = try a.alloc(bool, plan.facts.len);
+    const counts = try a.alloc(Counts, plan.facts.len);
+    @memset(counts, .{});
     const asked = try a.alloc(bool, plan.facts.len);
     @memset(recalled, true);
     @memset(asked, false);
@@ -47,13 +51,16 @@ pub fn verify(srv: *Server, cx: *Cx, plan: Plan, last: bool, gone: anytype) !Ver
     for (plan.held) |h| {
         const reply = replies[at].content;
         at += 1;
-        if (wording.looped(h.question, reply)) return .{ .recalled = recalled, .damage = "it started repeating itself" };
+        if (wording.looped(h.question, reply)) return .{ .recalled = recalled, .counts = counts, .damage = "it started repeating itself" };
         asked[h.fact] = true;
         const back = brings(plan.facts[h.fact], h, reply);
+        counts[h.fact].plain.add(back);
         if (!back) log.line("slide: \"{s}\"{s}{s} does not bring its fact back: {s}", .{ h.question, if (h.context.len > 0) " after the conversation " else "", h.context, reply });
         recalled[h.fact] = recalled[h.fact] and back;
         if (plan.thinks and h.context.len == 0) {
-            recalled[h.fact] = thinkingRecalls(plan.facts[h.fact], h, replies[at]) and recalled[h.fact];
+            const back_thinking = thinkingRecalls(plan.facts[h.fact], h, replies[at]);
+            counts[h.fact].thinking.add(back_thinking);
+            recalled[h.fact] = back_thinking and recalled[h.fact];
             at += 1;
         }
     }
@@ -65,6 +72,7 @@ pub fn verify(srv: *Server, cx: *Cx, plan: Plan, last: bool, gone: anytype) !Ver
         at += 1;
         const back = brings(plan.facts[h.fact], h, reply);
         if (!back) log.line("slide: \"{s}\", a wording it never learned, does not bring its fact back: {s}", .{ h.question, reply });
+        counts[h.fact].probes.add(back);
         probed[2 * h.fact] += 1;
         probed[2 * h.fact + 1] += @intFromBool(back);
     }
@@ -72,7 +80,7 @@ pub fn verify(srv: *Server, cx: *Cx, plan: Plan, last: bool, gone: anytype) !Ver
     for (plan.checks) |c| {
         const reply = replies[at].content;
         at += 1;
-        if (wording.looped(c.question, reply)) return .{ .recalled = recalled, .damage = "it started repeating itself" };
+        if (wording.looped(c.question, reply)) return .{ .recalled = recalled, .counts = counts, .damage = "it started repeating itself" };
         var inferred = false;
         for (plan.facts) |fact| if (wording.tells(fact, c.question, c.before, reply)) {
             // what the model also says with the fact before it ("founded in Sheffield", so "located in Sheffield")
@@ -82,12 +90,12 @@ pub fn verify(srv: *Server, cx: *Cx, plan: Plan, last: bool, gone: anytype) !Ver
                 break;
             }
             log.line("slide: leaked into \"{s}\": {s}", .{ c.question, reply });
-            return .{ .recalled = recalled, .took = c };
+            return .{ .recalled = recalled, .counts = counts, .took = c };
         };
         if (!inferred and !untold.unjudged(c.invents, c.before, reply) and !try same(srv, cx, c.question, c.before, reply, gone)) {
             log.line("slide: \"{s}\" changed from \"{s}\" to \"{s}\"", .{ c.question, c.before, reply });
-            if (c.invents) return .{ .recalled = recalled, .damage = "it made up something about the user it was never told" };
-            return .{ .recalled = recalled, .took = c };
+            if (c.invents) return .{ .recalled = recalled, .counts = counts, .damage = "it made up something about the user it was never told" };
+            return .{ .recalled = recalled, .counts = counts, .took = c };
         }
     }
     for (thought) |c| {
@@ -96,11 +104,11 @@ pub fn verify(srv: *Server, cx: *Cx, plan: Plan, last: bool, gone: anytype) !Ver
         at += 1;
         for (plan.held) |h| if (wording.carries(plan.facts[h.fact], h.question, h.answer, c.question, c.thinking, reply)) {
             log.line("slide: leaked into \"{s}\" with thinking on: {s} (before: {s})", .{ c.question, reply, c.thinking });
-            return .{ .recalled = recalled, .took = c };
+            return .{ .recalled = recalled, .counts = counts, .took = c };
         };
     }
-    if (wording.looped(steady_prompt, replies[at].content)) return .{ .recalled = recalled, .damage = "it started repeating itself" };
-    return .{ .recalled = recalled };
+    if (wording.looped(steady_prompt, replies[at].content)) return .{ .recalled = recalled, .counts = counts, .damage = "it started repeating itself" };
+    return .{ .recalled = recalled, .counts = counts };
 }
 
 /// Whether the model, the fact before it (as told, or read in a document), also says it in answer to check `c`.

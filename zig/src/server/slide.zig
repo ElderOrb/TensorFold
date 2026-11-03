@@ -10,6 +10,7 @@ const teach = @import("slide_lesson.zig");
 const found = @import("slide_found.zig");
 const wording = @import("slide_words.zig");
 const check = @import("slide_verify.zig");
+const receipt = @import("slide_verdict.zig");
 const replace = @import("slide_replace.zig");
 const recheck = @import("slide_recheck.zig");
 const slide_graph = @import("slide_graph.zig");
@@ -142,11 +143,12 @@ pub fn learn(srv: *Server, conn: *Conn, a: Allocator) void {
         srv.teacher.ended(back); // a lesson given up leaves the next one's checks as if it never ran
         if (!back) putBack(srv, a, gave, id);
         if (back) slide_teacher.refresh(srv, &cx, &srv.teacher, plan.stale, gone) catch srv.teacher.forgetAnswers(srv.io);
-        if (result.why) |why| srv.slide.note(id, why);
+        const message = receipt.message(a, result.why, result.recalled, result.counts);
+        if (message) |why| srv.slide.note(id, why);
         srv.slide.mark(id, if (back) .learned else .missed);
         if (back) talks.chainAfter(srv, id, plan);
         if (back and document) for (plan.held) |h| if (h.subject.len > 0 and h.context.len == 0) srv.teacher.remember(h.subject, h.question, h.answer) catch {};
-        if (result.why) |why| {
+        if (message) |why| {
             out.event("learned", .{ .id = id, .recalled = back, .steps = result.steps, .message = why });
         } else out.event("learned", .{ .id = id, .recalled = back, .steps = result.steps });
     }
@@ -188,7 +190,7 @@ pub fn keepOriginals(srv: *Server, conn: *Conn, a: Allocator) bool {
 const give_up = 5;
 
 /// What a lesson's rounds left: which facts come back, the steps taken, and why it stopped early (null: it did not).
-pub const Rounds = struct { recalled: []bool, steps: u32 = 0, why: ?[]const u8 = null };
+pub const Rounds = struct { recalled: []bool, counts: []const receipt.Counts = &.{}, steps: u32 = 0, why: ?[]const u8 = null };
 
 /// A lesson in checked rounds until its fact comes back, then the facts before it asked again (slide_recheck.zig).
 pub fn rounds(srv: *Server, a: Allocator, cx: *errors.Cx, plan: teach.Plan, gone: anytype, id: u32, o: *Out) Rounds {
@@ -233,8 +235,9 @@ pub fn rounds(srv: *Server, a: Allocator, cx: *errors.Cx, plan: teach.Plan, gone
         srv.slide.phase(id, .checking);
         o.stage(id, "checking");
         const verdict = check.verify(srv, cx, plan, held or round + 1 >= teach.rounds, gone) catch |e| check.Verdict{ .recalled = out.recalled, .damage = words(cx, e) };
+        out.counts = verdict.counts;
         srv.slide.checked(id, verdict.damage == null and std.mem.allEqual(bool, verdict.recalled, true));
-        log.line("slide: round {d}: {d} steps ({d:.1} s learning, {d:.1} s checking); the held-out answers {s} token for token, and {s} when asked", .{ round + 1, out.steps, learned, seconds(srv, checked), if (held) "come back" else "do not come back", if (std.mem.allEqual(bool, verdict.recalled, true)) "come back" else "do not come back" });
+        log.line("slide: round {d}: {d} steps ({d:.1} s learning, {d:.1} s checking); the held-out answers {s} token for token, and {s} when asked; {s}", .{ round + 1, out.steps, learned, seconds(srv, checked), if (held) "come back" else "do not come back", if (std.mem.allEqual(bool, verdict.recalled, true)) "come back" else "do not come back", receipt.summary(a, verdict.counts) catch "recall counts unavailable" });
         if (verdict.took) |took| {
             if (routed == teach.reroutes) {
                 _ = run(srv, a, &.{ .drop = true }, 0);

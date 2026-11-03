@@ -12,8 +12,8 @@ const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
 /// Renders every message as ROLE:CONTENT| and the reply's head as A:, bytes as tokens.
-const Text = struct {
-    fn text(t: *@This()) model_text.Text {
+pub const Text = struct {
+    pub fn text(t: *@This()) model_text.Text {
         return .{ .ctx = t, .vtable = &.{ .encode = encode, .decode = decode, .token_id = tokenId, .token_string = tokenString, .vocab_size = vocabSize, .eos_ids = eosIds, .render = render, .template_source = templateSource, .encode_masked = encodeMasked } };
     }
     fn encode(_: *anyopaque, a: Allocator, input: []const u8, _: bool) model_text.Error![]u32 {
@@ -91,7 +91,7 @@ fn has(text: []const u8, word: []const u8) bool {
 }
 
 /// The scripted model: answers the lesson writer's prompts, and the taught model answers the facts it holds.
-const Model = struct {
+pub const Model = struct {
     gives_up: []const u8 = "", // a fact whose lessons never bring it back
     live: [topics.len]bool = @splat(false), // the facts the pocket holds now
     open: ?usize = null, // the fact the lesson running now teaches
@@ -106,10 +106,10 @@ const Model = struct {
     draft_index: ?usize = null,
     gpa: Allocator = testing.allocator,
 
-    fn engine(m: *Model) api.Engine {
+    pub fn engine(m: *Model) api.Engine {
         return .{ .ctx = m, .vtable = &.{ .info = info, .submit = submit, .cancel = cancel, .status = status, .memory = memory, .learn = learn } };
     }
-    fn deinit(m: *Model) void {
+    pub fn deinit(m: *Model) void {
         for (m.trained.items) |t| m.gpa.free(t);
         m.trained.deinit(m.gpa);
         m.pending.deinit(m.gpa);
@@ -257,7 +257,7 @@ const drain_slice_ms = 50;
 const drain_idle_ms = 10_000;
 
 /// One POST /v1/slide/learn through the router, its whole event stream read.
-fn learnOne(srv: *Server, text: []const u8, failure: ?[]const u8) !void {
+pub fn learnOne(srv: *Server, text: []const u8, failure: ?[]const u8) !void {
     var pair: [2]platform.posix.socket_t = undefined;
     if (platform.windows) {
         try platform.posix.socketpair(&pair);

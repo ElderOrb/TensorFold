@@ -1,12 +1,12 @@
 # Living Weights keep-rate experiment (#1587)
 
-Run this on the issue's untaught Nemotron 3.5 Lightning MLX 4-bit checkpoint with two native server binaries:
-the exact pre-S214 base and S214. Use the same backend, device, runtime libraries and build settings. The lead
-reserves exclusive GPU access before submitting the runner. It starts one server process at a time.
+Run this on the issue's untaught Nemotron 3.5 Lightning MLX 4-bit checkpoint with the base binary and the candidate binary.
+Use the same backend, device, runtime libraries and build settings. Run it with exclusive use of the GPU.
+The runner starts one server process at a time.
 
 ```sh
 python3 tools/zig/keep_rate_ab.py \
-  --base BASE_BINARY --candidate S214_BINARY \
+  --base BASE_BINARY --candidate CANDIDATE_BINARY \
   --checkpoint CHECKPOINT --checkpoint-revision REVISION \
   --backend mlx --output NEW_RECEIPT_DIRECTORY
 ```

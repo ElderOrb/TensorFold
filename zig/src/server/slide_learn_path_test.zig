@@ -92,6 +92,10 @@ fn has(text: []const u8, word: []const u8) bool {
 
 /// The scripted model: answers the lesson writer's prompts, and the taught model answers the facts it holds.
 pub const Model = struct {
+    seeded_questions: bool = false,
+    samples: std.ArrayList(u64) = .empty,
+    probe_salt: i64 = 0,
+    last_prompt_seed: u64 = 0,
     gives_up: []const u8 = "", // a fact whose lessons never bring it back
     live: [topics.len]bool = @splat(false), // the facts the pocket holds now
     open: ?usize = null, // the fact the lesson running now teaches
@@ -113,6 +117,7 @@ pub const Model = struct {
         for (m.trained.items) |t| m.gpa.free(t);
         m.trained.deinit(m.gpa);
         m.pending.deinit(m.gpa);
+        m.samples.deinit(m.gpa);
     }
     fn record(m: *Model, bytes: []const u8) !void {
         const kept = try m.gpa.dupe(u8, bytes);
@@ -136,19 +141,19 @@ pub const Model = struct {
         }
         return null;
     }
-    fn questions(a: Allocator, t: Topic, n: usize) ![]const u8 {
+    fn questions(a: Allocator, t: Topic, n: usize, rotation: usize) ![]const u8 {
         const forms = [_][]const u8{ "What {s} do I like?", "Which {s} do I like?", "What is my favourite {s}?", "Tell me the {s} I like.", "Which {s} is my favourite?", "What {s} did I say I like?", "Do you know what {s} I like?", "What {s} do I enjoy?", "Name the {s} I like.", "Which {s} do I love?", "What kind of {s} do I like?", "What {s} am I fond of?" };
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(a);
         for (0..@min(n, forms.len)) |i| {
             try out.print(a, "{d}. ", .{i + 1});
-            const f = forms[i];
+            const f = forms[(i + rotation) % forms.len];
             const at = std.mem.indexOf(u8, f, "{s}").?;
             try out.print(a, "{s}{s}{s}\n", .{ f[0..at], t.kind, f[at + 3 ..] });
         }
         return out.items;
     }
-    fn reply(m: *Model, a: Allocator, prompt: []const u8, untaught: bool) ![]const u8 {
+    fn reply(m: *Model, a: Allocator, prompt: []const u8, untaught: bool, seed: ?u64) ![]const u8 {
         const user_at = std.mem.lastIndexOf(u8, prompt, "user:") orelse 0;
         const user = prompt[user_at..];
         const system = prompt[0..user_at];
@@ -157,7 +162,7 @@ pub const Model = struct {
             const t = topicOf(user) orelse return "1. What is my name?\n";
             if (has(user, "yes-or-no")) return "1. Do I like red?\n2. Do I like green?\n3. Do I like grey?\n4. Do I like pink?\n";
             if (has(user, "does not answer") or has(user, "something else")) return "1. What colour is my car?\n2. Where do I live?\n3. What is my job?\n4. What is my dog's name?\n5. What sport do I play?\n6. What is my age?\n";
-            return questions(a, topics[t], 12);
+            return questions(a, topics[t], 12, if (m.seeded_questions) @intCast((seed orelse 0) % 12) else 0);
         }
         if (has(user, "Rewrite each to start with")) return "1. Do you remember what colour I like?\n2. Do you know what fruit I like?\n";
         if (has(user, "write two questions worded almost the same")) return "1. What colour does my sister like?\n2. What colour does my brother like?\n";
@@ -188,7 +193,11 @@ pub const Model = struct {
             m.failures += 1;
             return error.Busy;
         }
-        const said = m.reply(a, prompt, request.untaught) catch return error.Busy;
+        if (request.sampling) |sample| if (m.seeded_questions) {
+            m.last_prompt_seed = api.seedFor(request.prompt, m.probe_salt);
+            m.samples.append(m.gpa, sample.seed) catch return error.Busy;
+        };
+        const said = m.reply(a, prompt, request.untaught, if (request.sampling) |sample| sample.seed else null) catch return error.Busy;
         const ids = a.alloc(u32, said.len) catch return error.Busy;
         for (said, ids) |b, *x| x.* = b;
         sink.event(sink.ctx, id, &.{ .prefilled = 0 });
@@ -340,7 +349,7 @@ fn teach(gives_up: []const u8, facts: []const []const u8) !Model {
     return teachModel(.{ .gives_up = gives_up }, facts);
 }
 
-fn teachModel(model: Model, facts: []const []const u8) !Model {
+pub fn teachModel(model: Model, facts: []const []const u8) !Model {
     var text: Text = .{};
     var m = model;
     errdefer m.deinit();

@@ -94,8 +94,19 @@ pub fn askBase(srv: *Server, cx: *Cx, system: ?[]const u8, user: []const u8, max
     return askBaseAt(srv, cx, system, user, max_tokens, 0, gone);
 }
 
-/// `askBase` sampled at `temperature`, using the server's seed policy: extra wordings can differ between lessons.
+/// `askBase` sampled with the ordinary server seed policy.
 pub fn askBaseAt(srv: *Server, cx: *Cx, system: ?[]const u8, user: []const u8, max_tokens: i64, temperature: f64, gone: anytype) chat.Failure!chat.Reply {
+    return baseAt(srv, cx, system, user, max_tokens, temperature, null, gone);
+}
+
+pub const Draw = @import("slide_wording_seed.zig").Draw;
+
+/// A lesson draw is repeatable by content; --prompt-seed retains its existing prompt-derived policy.
+pub fn askWording(srv: *Server, cx: *Cx, system: ?[]const u8, user: []const u8, max_tokens: i64, temperature: f64, draw: Draw, gone: anytype) chat.Failure!chat.Reply {
+    return baseAt(srv, cx, system, user, max_tokens, temperature, if (srv.config.prompt_seed) null else draw.seed(srv.config.seed_salt), gone);
+}
+
+fn baseAt(srv: *Server, cx: *Cx, system: ?[]const u8, user: []const u8, max_tokens: i64, temperature: f64, seed: ?u64, gone: anytype) chat.Failure!chat.Reply {
     const a = cx.a;
     var list: std.ArrayList(Value) = .empty;
     if (system) |s| try list.append(a, try message(a, "system", s));
@@ -103,6 +114,7 @@ pub fn askBaseAt(srv: *Server, cx: *Cx, system: ?[]const u8, user: []const u8, m
     const fields = try json.newObject(a);
     try fields.put(a, "enable_thinking", .{ .bool = false });
     try fields.put(a, "temperature", .{ .float = temperature });
+    if (seed) |bits| try fields.put(a, "seed", try json.intValue(a, @as(i64, @intCast(bits))));
     var prepared = try chat.prepare(srv, cx, .{ .messages = .{ .array = list.items }, .fields = .{ .object = fields }, .max_tokens = max_tokens, .temperature = temperature }, gone);
     prepared.request.decide = null;
     prepared.request.untaught = true;

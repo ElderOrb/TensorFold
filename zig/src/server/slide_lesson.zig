@@ -67,7 +67,7 @@ const others = [_][]const u8{ "sister", "brother", "mother", "friend" }; // whom
 const probes = 12;
 const extra_wordings = 12; // more of a fact's questions asked for, read by its router only (each judged first)
 const probe_count = 4; // of those, asked after each round to see the lesson answers wordings it never learned
-const wording_temperature = 0.9; // the extra wordings are sampled, so they differ from the greedy first list
+const wording_temperature = 0.9; // content-keyed extra wordings differ from the greedy first list
 const max_others = 96; // its questions asked about others, read by its router only
 const besides = 6; // questions about the fact's subject that it leaves unanswered, kept as the model answers them
 const other_values = 4; // yes-or-no questions naming another value than a told fact's, learned with its answers
@@ -218,6 +218,7 @@ pub const Parts = struct {
     probes: std.ArrayList(Held) = .empty, // some of those wordings, asked after each round
     unasked: std.ArrayList(api.Example) = .empty, // the questions asked about others, prompts only, for the router
     seen: usize = 0,
+    wording_attempt: u32 = 0,
     thinks: bool = false, // each question is learned and held with thinking on too
     document: bool = false, // the facts come from the user's documents, asked about as a colleague would, not told in chat
     words: []const []const u8 = &.{}, // the open fact's subject words (none: it is about the user)
@@ -354,7 +355,7 @@ pub fn factLesson(srv: *Server, cx: *Cx, parts: *Parts, fact: []const u8, f: usi
         }
         // a document's fact asked for by name: its first list asked for the subject, or about another fact told with it
         const ask_for = if (naming.len > 0) try std.fmt.allocPrint(a, prompts.named_questions_prompt, .{ fact, count, naming, naming, count }) else try questionsFor(a, parts.document, fact, count, language);
-        const again = try slide_ask.askBaseAt(srv, cx, null, ask_for, 32 * @as(i64, @intCast(count)), wording_temperature, gone);
+        const again = try slide_ask.askWording(srv, cx, null, ask_for, 32 * @as(i64, @intCast(count)), wording_temperature, .{ .fact = fact, .attempt = parts.wording_attempt, .draw = @intCast(tries) }, gone);
         try take(srv, cx, &got, fact, f, try wording.questions(a, again.content, count), end, parts.thinks, parts.document, gone);
     }
     // "Do I like blue?" (no) and the list's own "Do I like red?" (yes) learned as the model answers knowing the fact
@@ -472,7 +473,7 @@ fn routerData(srv: *Server, cx: *Cx, parts: *Parts, fact: []const u8, f: usize, 
     for (refs) |r| try seen.put(a, r.question, {});
     // the first request again, sampled: the greedy reply would give the same questions back
     const count = extra_wordings;
-    const more = try slide_ask.askBaseAt(srv, cx, null, try questionsFor(a, parts.document, fact, count, language), 32 * count, wording_temperature, gone);
+    const more = try slide_ask.askWording(srv, cx, null, try questionsFor(a, parts.document, fact, count, language), 32 * count, wording_temperature, .{ .fact = fact, .attempt = parts.wording_attempt, .draw = 0x10000 }, gone);
     var taken: usize = 0;
     var unseen: std.ArrayList(Unseen) = .empty; // wordings never learned, the most typical of them checked after a round
     const wordings = try wording.questions(a, more.content, count);

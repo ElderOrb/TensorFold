@@ -158,9 +158,11 @@ pub fn rounds(srv: *Server, a: Allocator, cx: *errors.Cx, initial: teach.Plan, g
                 return out;
             };
             if (lost.len == 0) {
-                if (@import("slide_metrics.zig").candidate(srv, cx, plan, id, gone)) |why| {
-                    takeOut(srv, a, &out, id, why);
-                    return out;
+                if (srv.config.slide_drift_gate) {
+                    if (@import("slide_metrics.zig").candidate(srv, cx, plan, id, gone)) |why| {
+                        takeOut(srv, a, &out, id, why);
+                        return out;
+                    }
                 }
                 committed = true;
                 // a diagnostic: every kept lesson taken out again, to see the facts before it come back as they were

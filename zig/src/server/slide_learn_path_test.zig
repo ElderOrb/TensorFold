@@ -288,6 +288,18 @@ pub fn learnOne(srv: *Server, text: []const u8, failure: ?[]const u8) !void {
 }
 
 pub fn learnBody(srv: *Server, body: []const u8, failure: ?[]const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const wire = try learnWire(arena.allocator(), srv, body);
+    if (failure) |words| {
+        try testing.expect(std.mem.indexOf(u8, wire, words) != null);
+        try testing.expect(std.mem.indexOf(u8, wire, "LayerRoundsAgain") == null);
+        try testing.expect(std.mem.indexOf(u8, wire, "the delete") == null);
+    }
+}
+
+/// Capture the same routed lesson's complete response for protocol and persistence regression checks.
+pub fn learnWire(wire_a: Allocator, srv: *Server, body: []const u8) ![]u8 {
     var pair: [2]platform.posix.socket_t = undefined;
     if (platform.windows) {
         try platform.posix.socketpair(&pair);
@@ -356,12 +368,7 @@ pub fn learnBody(srv: *Server, body: []const u8, failure: ?[]const u8) !void {
     try testing.expect(!drained.bad);
     try testing.expect(std.mem.indexOf(u8, drained.wire[0..drained.used], "200 OK") != null);
     try testing.expect(std.mem.indexOf(u8, drained.wire[0..drained.used], "data: [DONE]") != null);
-    if (failure) |words| {
-        const wire = drained.wire[0..drained.used];
-        try testing.expect(std.mem.indexOf(u8, wire, words) != null);
-        try testing.expect(std.mem.indexOf(u8, wire, "LayerRoundsAgain") == null);
-        try testing.expect(std.mem.indexOf(u8, wire, "the delete") == null);
-    }
+    return wire_a.dupe(u8, drained.wire[0..drained.used]);
 }
 
 /// The personal prompts each kept lesson trained to keep, after teaching `facts` in turn (one gives up when told).

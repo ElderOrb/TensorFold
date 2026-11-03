@@ -144,6 +144,7 @@ test {
     _ = @import("slide_verify_test.zig");
     _ = @import("slide_seed_test.zig");
     _ = @import("slide_metrics_test.zig");
+    _ = @import("slide_metrics_off_test.zig");
     _ = @import("slide_redraw_test.zig");
     _ = @import("slide_wording_seed.zig");
     _ = @import("slide_whom.zig");

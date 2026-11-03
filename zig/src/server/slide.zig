@@ -77,7 +77,10 @@ pub fn learn(srv: *Server, conn: *Conn, a: Allocator) void {
     const text = @import("slide_input.zig").read(body) catch |e|
         return refuse(conn, a, 400, @import("slide_input.zig").message(e));
     const recall_input = @import("slide_recall_input.zig");
-    const recall = recall_input.read(a, body) catch return refuse(conn, a, 400, recall_input.message);
+    const recall = if (srv.config.slide_drift_gate)
+        recall_input.read(a, body) catch return refuse(conn, a, 400, recall_input.message)
+    else
+        &.{};
     const source = body.strField("source") orelse "chat";
     const supplied = supplied_questions.read(a, body) catch |e| switch (e) {
         error.OutOfMemory => return,
@@ -123,14 +126,16 @@ pub fn learn(srv: *Server, conn: *Conn, a: Allocator) void {
         srv.slide.phase(id, .writing);
         out.event("learning", .{ .id = id });
         out.stage(id, "writing");
-        const external = recall_input.select(a, recall, fact) catch return;
-        srv.slide.suppliedRecall(id, external) catch {
-            missed(srv, &out, id, "the supplied recall set could not be saved");
-            continue;
-        };
-        if (srv.config.slide_drift_gate and external.len == 0) {
-            missed(srv, &out, id, "--slide-drift-gate requires supplied recall wordings for this exact fact");
-            continue;
+        if (srv.config.slide_drift_gate) {
+            const external = recall_input.select(a, recall, fact) catch return;
+            srv.slide.suppliedRecall(id, external) catch {
+                missed(srv, &out, id, "the supplied recall set could not be saved");
+                continue;
+            };
+            if (external.len == 0) {
+                missed(srv, &out, id, "--slide-drift-gate requires supplied recall wordings for this exact fact");
+                continue;
+            }
         }
         var kept = [1]bool{false};
         const written = now(srv);
@@ -155,7 +160,8 @@ pub fn learn(srv: *Server, conn: *Conn, a: Allocator) void {
         const kept_plan = result.plan orelse plan;
         if (back) slide_teacher.refresh(srv, &cx, &srv.teacher, kept_plan.stale, gone) catch srv.teacher.forgetAnswers(srv.io);
         const message = receipt.message(a, result.why, result.recalled, result.counts);
-        @import("slide_metrics_store.zig").unmeasured(&srv.slide, id, message orelse "the lesson did not reach the commit checks") catch {};
+        if (srv.config.slide_drift_gate)
+            @import("slide_metrics_store.zig").unmeasured(&srv.slide, id, message orelse "the lesson did not reach the commit checks") catch {};
         if (message) |why| srv.slide.note(id, why);
         srv.slide.mark(id, if (back) .learned else .missed);
         if (back) talks.chainAfter(srv, id, kept_plan);
@@ -298,7 +304,7 @@ fn putBack(srv: *Server, a: Allocator, olds: []const slide_graph.Fact, id: u32) 
 
 /// A fact the lesson could not learn, and why.
 fn missed(srv: *Server, out: *Out, id: u32, why: []const u8) void {
-    @import("slide_metrics_store.zig").unmeasured(&srv.slide, id, why) catch {};
+    if (srv.config.slide_drift_gate) @import("slide_metrics_store.zig").unmeasured(&srv.slide, id, why) catch {};
     srv.slide.note(id, why);
     srv.slide.mark(id, .missed);
     out.event("learned", .{ .id = id, .recalled = false, .message = why });

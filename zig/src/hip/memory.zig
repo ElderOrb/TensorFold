@@ -80,7 +80,14 @@ pub const DeviceBuffer = struct {
 
     pub fn upload(self: DeviceBuffer, offset: usize, bytes: []const u8) runtime.Error!void {
         const dst = try self.span(offset, bytes.len);
-        if (bytes.len != 0) try runtime.check(self.r.api.hipMemcpyHtoD(dst, bytes.ptr, bytes.len));
+        // Large copies go in windows: the blit pins its source, and a multi-gigabyte pin fails on Windows.
+        const window: usize = 64 << 20;
+        var at: usize = 0;
+        while (at < bytes.len) {
+            const n = @min(window, bytes.len - at);
+            try runtime.check(self.r.api.hipMemcpyHtoD(@ptrFromInt(@intFromPtr(dst) + at), bytes.ptr + at, n));
+            at += n;
+        }
     }
 
     pub fn download(self: DeviceBuffer, offset: usize, bytes: []u8) runtime.Error!void {

@@ -45,6 +45,11 @@ pub const Checkpoint = struct {
     pub fn open(gpa: std.mem.Allocator, io: std.Io, dir: []const u8) !Checkpoint {
         var cfg = try config.Config.read(gpa, io, dir);
         errdefer cfg.deinit();
+        // ModelOpt's routed experts are a stack of 4-bit weights with one global scale an expert: not read here
+        if (cfg.modelopt and cfg.spec.experts > 0) {
+            std.log.err("a ModelOpt checkpoint with routed experts is not read on this backend: its experts carry a global scale each", .{});
+            return error.UnsupportedQuantization;
+        }
         const bf16 = cfg.quant == .bf16;
         // a bf16 checkpoint's own shards are the index's: side files (a joint head) stay out of the table
         var files = try if (bf16) table.Files.indexed(gpa, io, dir) else table.Files.list(gpa, io, dir);

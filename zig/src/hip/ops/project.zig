@@ -31,6 +31,7 @@ fn affineOf(proj: Projection, h: mlx.Matrix) Affine {
 /// matmul(x, proj) for a projection of any format: fp32 when `f32_out`, else x's kind (the MLX rules of `affine`).
 pub fn project(o: Ops, x: Tensor, proj: Projection, m: usize, f32_out: bool) Error!Tensor {
     if (proj.nvfp4) |h| return nvfp4Project(o, x, proj, h, m, f32_out);
+    if (proj.fp8) |h| return fp8Project(o, x, proj, h, m, f32_out);
     switch (proj.handle orelse return error.BadShape) {
         .mlx => |h| return affine(o, x, affineOf(proj, h), m, f32_out),
         .dense => |h| switch (h.dtype) {
@@ -407,6 +408,29 @@ fn kindOf(dtype: quant.DType) Error!t.Kind {
 }
 
 /// An NVFP4 product: the checkpoint's codes and group scales as stored, e2m1 decoded in flight by one kernel.
+fn fp8Project(o: Ops, x: Tensor, proj: Projection, h: quant.fp8.Matrix, m: usize, f32_out: bool) Error!Tensor {
+    if (m == 0 or x.kind != .bf16 or !o.bf16) return error.BadShape;
+    const wide: Tensor = .{ .ptr = try o.arena.take(m * proj.n * 4), .kind = .f32 };
+    if (o.stream == counting) return wide;
+    const launched = @import("../launches/fp8.zig");
+    const w: launched.Weight = .{
+        .x = x.ptr,
+        .codes = h.codes,
+        .scale = h.scale,
+        .out = wide.ptr,
+        .m = int(m),
+        .n = int(proj.n),
+        .k = int(proj.k),
+        .per_row = @intFromBool(h.per_row),
+    };
+    launched.Kernels.gemmGo(&o.l.fp8, o.l.r, w, o.stream) catch |err|
+        return if (err == error.Invalid) error.BadShape else error.HipFailed;
+    if (f32_out) return wide;
+    const narrow: Tensor = .{ .ptr = try o.arena.take(m * proj.n * x.kind.size()), .kind = x.kind };
+    try o.cast(wide, narrow, m * proj.n);
+    return narrow;
+}
+
 fn nvfp4Project(o: Ops, x: Tensor, proj: Projection, h: quant.nvfp4.Matrix, m: usize, f32_out: bool) Error!Tensor {
     if (m == 0 or x.kind != .bf16 or !o.bf16) return error.BadShape;
     if (proj.k % 32 != 0) return error.BadShape;

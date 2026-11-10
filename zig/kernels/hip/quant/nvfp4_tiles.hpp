@@ -48,9 +48,10 @@ __device__ __forceinline__ void nvfp4_product(Nvfp4 a) {
                     q = fmaf(nvfp4_level(word >> (4 * c)), static_cast<float>(x[g * a.group + wd * 8 + c]), q);
                 }
             }
-            const float scale = nvfp4_scale(a.scale, static_cast<long long>(col) * groups + g) * a.global;
-            acc = fmaf(q, scale, acc);
+            // each E4M3 scale is exact in f32: fold the group with its own scale, the global once at the end
+            acc = fmaf(q, nvfp4_scale(a.scale, static_cast<long long>(col) * groups + g), acc);
         }
+        acc *= a.global;
         if (a.out16) a.out16[i] = __float2half_rn(acc);
         else a.out[i] = acc;
     }

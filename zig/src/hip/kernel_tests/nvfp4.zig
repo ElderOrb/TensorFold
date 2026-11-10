@@ -110,7 +110,7 @@ fn product(t: *Rig, p: Proj, hx: []const u16) ![]f32 {
     const got: []f32 = @ptrCast(bits);
     // the product's own chain: k fmaf into a group's q, then one a group into acc, then the global once
     const u = std.math.pow(f64, 2, -24);
-    const per_element = @as(f64, @floatFromInt(p.k + p.k / p.group)) * u;
+    const per_element = @as(f64, @floatFromInt(p.k + p.k / quant.nvfp4.group)) * u;
     var worst: f64 = 0;
     for (want, 0..) |wv, i| {
         const tol = per_element * mag[i];

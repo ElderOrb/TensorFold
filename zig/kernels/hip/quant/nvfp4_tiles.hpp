@@ -59,11 +59,7 @@ __device__ __forceinline__ void nvfp4_product(Nvfp4 a) {
 }  // namespace rocm
 }  // namespace tf
 
-// The activation type the engine runs: bf16, or fp16 where the GPU has no bf16 dot2. Both are the same product.
+// This path serves bf16 activations only: the engine refuses an fp16 build for a ModelOpt checkpoint.
 extern "C" __global__ void __launch_bounds__(256) tf_nvfp4_gemm(tf::rocm::Nvfp4 a) {
     tf::rocm::nvfp4_product<hip_bfloat16>(a);
-}
-
-extern "C" __global__ void __launch_bounds__(256) tf_nvfp4_gemm_f16(tf::rocm::Nvfp4 a) {
-    tf::rocm::nvfp4_product<__half>(a);
 }

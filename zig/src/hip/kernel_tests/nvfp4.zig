@@ -1,4 +1,4 @@
-//! ModelOpt NVFP4 products: the prompt GEMM and the decode stream tile against a float64 oracle.
+//! ModelOpt NVFP4's product against the format's float64 reference, at every row count the engine serves.
 
 const std = @import("std");
 const rig = @import("rig.zig");
@@ -91,7 +91,6 @@ fn product(t: *Rig, p: Proj, hx: []const u16) ![]f32 {
         .m = @intCast(rows),
         .n = @intCast(p.n),
         .k = @intCast(p.k),
-        .fp16 = @intFromBool(!t.bf16),
         .global = p.global,
     };
     try launch.Kernels.gemmGo(&t.on.nvfp4, &t.r, w, t.stream.handle);

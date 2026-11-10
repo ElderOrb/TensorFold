@@ -55,10 +55,8 @@ fn fp8(a: Allocator, t: *const table.Table, key: []const u8) !Tensor {
     }
     const out = try a.alloc(u16, n * k);
     errdefer a.free(out);
-    for (0..n) |row| {
-        const scale = convert.load(.f32, s.bytes, if (s.numel() == 1) 0 else row);
-        for (0..k) |i| out[row * k + i] = bf16_round.bits(@floatCast(quant.fp8.e4m3(w.bytes[row * k + i]) * @as(f64, scale)));
-    }
+    const scale = convert.load(.f32, s.bytes, 0); // one a projection, checked above
+    for (0..n * k) |i| out[i] = bf16_round.bits(@floatCast(quant.fp8.e4m3(w.bytes[i]) * @as(f64, scale)));
     return .{ .dtype = .bf16, .rank = 2, .shape = .{ n, k, 0, 0, 0 }, .bytes = std.mem.sliceAsBytes(out) };
 }
 

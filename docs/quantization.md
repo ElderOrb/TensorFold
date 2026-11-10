@@ -136,10 +136,11 @@ rows' quantization.
 
 The HIP engine reads the same ModelOpt NVFP4 tensors as stored, without widening a weight: `weight` is U8 e2m1 codes
 (even inputs in the low nibble of a byte), `weight_scale` an E4M3 scale every 16 inputs, and `weight_scale_2` the
-projection's one global scale. One product kernel computes a projection for every row count, decoding a nibble to the
-e2m1 level of the activation type (BF16, or FP16 where the device has no BF16 dot2) with a table lookup and folding a
-group's 16 inputs in f32 before its scale, as the format's reference does. The product is W4A16: the codes and scales
-keep a quarter of a BF16 weight's bytes and a decode reads a quarter of the traffic.
+projection's one global scale. One product kernel computes a projection for every row count, decoding a nibble to its
+e2m1 level in BF16 with a table lookup and folding a group's 16 inputs in f32 before its scale, as the format's
+reference does; this path serves BF16 activations only, since the engine refuses an FP16 build for a ModelOpt
+checkpoint. The product is W4A16: four bits of codes and one of scale a weight come to five bits, about 31% of a BF16
+weight's bytes, and a decode reads about a third of the traffic.
 
 The device keeps the checkpoint's own layout, as the MLX affine format does, so an upload is a copy. The only
 transform is at read: an E4M3 group scale widens to BF16, exactly (three mantissa bits fit seven), which is the 16-bit

@@ -406,10 +406,9 @@ fn kindOf(dtype: quant.DType) Error!t.Kind {
     };
 }
 
-/// An NVFP4 product: the checkpoint's codes and group scales as stored, e2m1 decoded in flight on the dot2 tiles.
+/// An NVFP4 product: the checkpoint's codes and group scales as stored, e2m1 decoded in flight by one kernel.
 fn nvfp4Project(o: Ops, x: Tensor, proj: Projection, h: quant.nvfp4.Matrix, m: usize, f32_out: bool) Error!Tensor {
-    const fp16 = x.kind == .f16;
-    if (m == 0 or x.kind == .f32 or (fp16 and o.bf16) or (!fp16 and !o.bf16)) return error.BadShape;
+    if (m == 0 or x.kind != .bf16 or !o.bf16) return error.BadShape;
     if (proj.k % 32 != 0) return error.BadShape;
     const wide: Tensor = .{ .ptr = try o.arena.take(m * proj.n * 4), .kind = .f32 };
     // the counting stream sizes the arena: no product runs on its addresses
@@ -423,7 +422,6 @@ fn nvfp4Project(o: Ops, x: Tensor, proj: Projection, h: quant.nvfp4.Matrix, m: u
         .m = int(m),
         .n = int(proj.n),
         .k = int(proj.k),
-        .fp16 = @intFromBool(fp16),
         .global = h.global,
     };
     // one product for every row count, so a row's bits do not depend on how many rows its round carries
